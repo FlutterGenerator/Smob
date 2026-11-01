@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">Smob</string>
+    <string name="pur">Debug Info</string>
+    <string name="obf">Obfuscation</string>
+    <string name="recusivity">Recursivity</string>
+    <string name="constructors">Constructors</string>
+</resources>
