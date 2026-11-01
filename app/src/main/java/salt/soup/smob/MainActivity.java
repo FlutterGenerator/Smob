@@ -1,7 +1,7 @@
-
 package salt.soup.smob;
 
 import android.Manifest;
+import android.app.Activity;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
@@ -11,38 +11,35 @@ import android.os.Bundle;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
-import android.preference.PreferenceManager;
 import android.provider.Settings;
 import android.view.View;
-import android.widget.*;
-
-import androidx.appcompat.app.AppCompatActivity;
-import androidx.core.app.ActivityCompat;
-import androidx.core.content.ContextCompat;
-
-import com.codekidlabs.storagechooser.StorageChooser;
-
-import com.chaquo.python.Python;
-import com.chaquo.python.android.AndroidPlatform;
-import com.chaquo.python.PyObject;
+import android.widget.Button;
+import android.widget.CheckBox;
+import android.widget.Spinner;
+import android.widget.TextView;
+import android.widget.Toast;
 
 import java.io.File;
-import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-public class MainActivity extends AppCompatActivity
-        implements AdapterView.OnItemSelectedListener,
-        CompoundButton.OnCheckedChangeListener {
+// Импорт FileChooserBuilder добавь через AIDE:
+// FileChooserBuilder
 
-    public static String t = "";
-    public static String u = "";
+import com.chaquo.python.Python;
+import com.chaquo.python.AndroidPlatform;
+import com.chaquo.python.PyObject;
 
-    public CheckBox o;
-    public CheckBox p;
-    public Spinner q;
-    public SharedPreferences r;
-    public View s;
+public class MainActivity extends Activity {
+
+    public static String t;
+    public static String u;
+
+    private CheckBox o, p;
+    private Spinner q;
+
+    private SharedPreferences r;
 
     private Button obfuscateButton;
     private Button purgeButton;
@@ -50,29 +47,23 @@ public class MainActivity extends AppCompatActivity
     private TextView resultText;
     private TextView pathText;
 
-    private Handler mainHandler;
-    private ExecutorService executor;
+    private final Handler mainHandler =
+            new Handler(Looper.getMainLooper());
 
-    private static final int REQ_STORAGE = 100;
+    private final ExecutorService executor =
+            Executors.newSingleThreadExecutor();
 
-    private boolean waitingForStorageSettings = false;
+    private static final int REQUEST_FOLDER = 501;
+    private static final int REQUEST_STORAGE = 502;
+
     private boolean operationRunning = false;
-    private boolean chooserOpening = false;
-    private volatile boolean activityDestroyed = false;
-
-    // --------------------------------
-    // ACTIVITY
-    // --------------------------------
+    private boolean waitingForSettings = false;
+    private volatile boolean destroyed = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
-
-        mainHandler = new Handler(Looper.getMainLooper());
-        executor = Executors.newSingleThreadExecutor();
-
-        r = PreferenceManager.getDefaultSharedPreferences(this);
 
         obfuscateButton = findViewById(R.id.button_obf);
         purgeButton = findViewById(R.id.button_pur);
@@ -80,132 +71,122 @@ public class MainActivity extends AppCompatActivity
         resultText = findViewById(R.id.textView);
         pathText = findViewById(R.id.patchPath);
 
-        s = findViewById(R.id.progressBar);
-
         o = findViewById(R.id.checkBox);
         p = findViewById(R.id.checkBox2);
         q = findViewById(R.id.spinner);
 
-        if (obfuscateButton == null || purgeButton == null
-                || resultText == null || pathText == null
-                || s == null || o == null || p == null || q == null) {
-            Toast.makeText(this,
-                    "Layout initialization error",
-                    Toast.LENGTH_LONG).show();
-            return;
+        r = getSharedPreferences("settings", MODE_PRIVATE);
+
+        if (q != null) {
+            q.setSelection(r.getInt("level", 0));
         }
 
-        obfuscateButton.setEnabled(false);
-        purgeButton.setEnabled(false);
+        if (o != null) {
+            o.setChecked(r.getBoolean("rec", false));
+        }
 
-        setupSpinner();
-        setupPreferences();
-
-        o.setOnCheckedChangeListener(this);
-        p.setOnCheckedChangeListener(this);
+        if (p != null) {
+            p.setChecked(r.getBoolean("con", false));
+        }
 
         obfuscateButton.setOnClickListener(v -> {
-            if (operationRunning || chooserOpening) return;
-
             u = "obf";
-            resetFields();
-            openChooser();
+            openFolderPicker();
         });
 
         purgeButton.setOnClickListener(v -> {
-            if (operationRunning || chooserOpening) return;
-
             u = "pur";
-            resetFields();
-            openChooser();
+            openFolderPicker();
         });
 
-        prepareFiles();
+        preparePython();
     }
 
-    // --------------------------------
-    // STORAGE PERMISSIONS
-    // --------------------------------
+    private void preparePython() {
+        executor.execute(() -> {
+            try {
+                if (!Python.isStarted()) {
+                    Python.start(new AndroidPlatform(this));
+                }
 
-    private boolean hasStorageAccess() {
+                Python.getInstance();
 
+            } catch (Exception e) {
+                showMessage("Python error: " + e.getMessage());
+            }
+        });
+    }
+
+    private boolean hasStoragePermission() {
         if (Build.VERSION.SDK_INT >= 30) {
             return Environment.isExternalStorageManager();
         }
 
         if (Build.VERSION.SDK_INT >= 23) {
-
-            boolean read = ContextCompat.checkSelfPermission(
-                    this,
+            return checkSelfPermission(
                     Manifest.permission.READ_EXTERNAL_STORAGE
             ) == PackageManager.PERMISSION_GRANTED;
-
-            boolean write = ContextCompat.checkSelfPermission(
-                    this,
-                    Manifest.permission.WRITE_EXTERNAL_STORAGE
-            ) == PackageManager.PERMISSION_GRANTED;
-
-            return read && write;
         }
 
         return true;
     }
 
-    private void openChooser() {
+    private void requestStoragePermission() {
+        try {
+            if (Build.VERSION.SDK_INT >= 30) {
+                waitingForSettings = true;
 
-        if (activityDestroyed || operationRunning || chooserOpening) {
-            return;
-        }
-
-        if (hasStorageAccess()) {
-            showStorageChooser();
-        } else {
-            requestStorageAccess();
-        }
-    }
-
-    private void requestStorageAccess() {
-
-        if (Build.VERSION.SDK_INT >= 30) {
-
-            try {
                 Intent intent = new Intent(
                         Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
                         Uri.parse("package:" + getPackageName())
                 );
 
-                waitingForStorageSettings = true;
-                startActivity(intent);
-
-            } catch (Exception e) {
-
                 try {
-                    Intent intent = new Intent(
-                            Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION
-                    );
-
-                    waitingForStorageSettings = true;
                     startActivity(intent);
-
-                } catch (Exception ex) {
-                    waitingForStorageSettings = false;
-                    showMessage("Cannot open storage settings: " + ex);
+                } catch (Exception e) {
+                    startActivity(new Intent(
+                            Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION
+                    ));
                 }
+
+            } else if (Build.VERSION.SDK_INT >= 23) {
+                requestPermissions(
+                        new String[]{
+                                Manifest.permission.READ_EXTERNAL_STORAGE
+                        },
+                        REQUEST_STORAGE
+                );
             }
 
-        } else if (Build.VERSION.SDK_INT >= 23) {
+        } catch (Exception e) {
+            showMessage("Permission error: " + e.getMessage());
+        }
+    }
 
-            ActivityCompat.requestPermissions(
-                    this,
-                    new String[]{
-                            Manifest.permission.READ_EXTERNAL_STORAGE,
-                            Manifest.permission.WRITE_EXTERNAL_STORAGE
-                    },
-                    REQ_STORAGE
+    private void openFolderPicker() {
+        if (operationRunning || destroyed) {
+            return;
+        }
+
+        if (!hasStoragePermission()) {
+            requestStoragePermission();
+            return;
+        }
+
+        try {
+            FileChooserBuilder picker =
+                    FileChooserBuilder.getDirectoryChooserInstance(this);
+
+            picker.showHidden(false);
+
+            picker.setPickerInitialPath(
+                    FileChooserBuilder.BaseFolderPathType.BASE_PATH_DEFAULT
             );
 
-        } else {
-            showStorageChooser();
+            picker.launchFilePicker();
+
+        } catch (Exception e) {
+            showMessage("Picker error: " + e.getMessage());
         }
     }
 
@@ -213,14 +194,11 @@ public class MainActivity extends AppCompatActivity
     protected void onResume() {
         super.onResume();
 
-        if (waitingForStorageSettings) {
+        if (waitingForSettings) {
+            waitingForSettings = false;
 
-            waitingForStorageSettings = false;
-
-            if (hasStorageAccess()) {
-                showStorageChooser();
-            } else {
-                showMessage("Storage permission denied");
+            if (hasStoragePermission()) {
+                openFolderPicker();
             }
         }
     }
@@ -229,207 +207,77 @@ public class MainActivity extends AppCompatActivity
     public void onRequestPermissionsResult(
             int requestCode,
             String[] permissions,
-            int[] grantResults) {
-
+            int[] grantResults
+    ) {
         super.onRequestPermissionsResult(
-                requestCode, permissions, grantResults
+                requestCode,
+                permissions,
+                grantResults
         );
 
-        if (requestCode == REQ_STORAGE) {
-
-            if (hasStorageAccess()) {
-                showStorageChooser();
+        if (requestCode == REQUEST_STORAGE) {
+            if (hasStoragePermission()) {
+                openFolderPicker();
             } else {
                 showMessage("Storage permission denied");
             }
         }
     }
 
-    // --------------------------------
-    // STORAGE CHOOSER
-    // --------------------------------
-
-    private void showStorageChooser() {
-
-        if (activityDestroyed || isFinishing() || isDestroyed()) {
-            return;
-        }
-
-        if (chooserOpening) return;
-
-        chooserOpening = true;
+    @Override
+    protected void onActivityResult(
+            int requestCode,
+            int resultCode,
+            Intent data
+    ) {
+        super.onActivityResult(requestCode, resultCode, data);
 
         try {
+            List<String> paths =
+                    FileChooserBuilder.handleActivityResult(
+                            this,
+                            requestCode,
+                            resultCode,
+                            data
+                    );
 
-            File storage = Environment.getExternalStorageDirectory();
-
-            if (storage == null || !storage.exists()
-                    || !storage.isDirectory() || !storage.canRead()) {
-
-                chooserOpening = false;
-                showMessage("External storage is unavailable");
+            if (paths == null || paths.isEmpty()) {
                 return;
             }
 
-            StorageChooser chooser = new StorageChooser.Builder()
-                    .withActivity(this)
-                    .withFragmentManager(getFragmentManager())
-                    .withMemoryBar(true)
-                    .allowCustomPath(true)
-                    .setType(StorageChooser.DIRECTORY_CHOOSER)
-                    .build();
-
-            chooser.setOnSelectListener(path -> {
-
-                chooserOpening = false;
-
-                if (activityDestroyed || isFinishing()) return;
-
-                if (path == null || path.trim().isEmpty()) {
-                    showMessage("Folder not selected");
-                    return;
-                }
-
-                File folder = new File(path);
-
-                if (!folder.exists() || !folder.isDirectory()) {
-                    showMessage("Invalid folder");
-                    return;
-                }
-
-                if (!folder.canRead()) {
-                    showMessage("Cannot read selected folder");
-                    return;
-                }
-
-                pathText.setText(folder.getAbsolutePath());
-
-                executeOperation(folder);
-            });
-
-            chooser.show();
-
-        } catch (Exception e) {
-
-            chooserOpening = false;
-
-            showMessage("Storage chooser error: " + e.toString());
-        }
-    }
-
-    // --------------------------------
-    // PYTHON
-    // --------------------------------
-
-    private void initializePython() {
-
-        if (!Python.isStarted()) {
-            Python.start(
-                    new AndroidPlatform(getApplicationContext())
-            );
-        }
-    }
-
-    private void prepareFiles() {
-
-        s.setVisibility(View.VISIBLE);
-
-        executor.execute(() -> {
-
-            try {
-
-                initializePython();
-
-                mainHandler.post(() -> {
-
-                    if (activityDestroyed) return;
-
-                    s.setVisibility(View.GONE);
-
-                    obfuscateButton.setEnabled(true);
-                    purgeButton.setEnabled(true);
-                });
-
-            } catch (Exception e) {
-
-                mainHandler.post(() -> {
-
-                    if (activityDestroyed) return;
-
-                    s.setVisibility(View.GONE);
-
-                    obfuscateButton.setEnabled(false);
-                    purgeButton.setEnabled(false);
-
-                    showMessage(
-                            "Python initialization error: " + e
-                    );
-                });
+            if (requestCode != REQUEST_FOLDER) {
+                return;
             }
-        });
-    }
 
-    // --------------------------------
-    // SPINNER
-    // --------------------------------
+            String selectedPath = paths.get(0);
 
-    private void setupSpinner() {
+            if (selectedPath == null) {
+                showMessage("Folder not selected");
+                return;
+            }
 
-        ArrayList<String> levels = new ArrayList<>();
+            File folder = new File(selectedPath);
 
-        for (int i = 0; i < 10; i++) {
-            levels.add("Level: " + i);
-        }
+            if (!folder.exists() || !folder.isDirectory()) {
+                showMessage("Invalid folder");
+                return;
+            }
 
-        ArrayAdapter<String> adapter = new ArrayAdapter<>(
-                this,
-                android.R.layout.simple_spinner_item,
-                levels
-        );
+            t = folder.getAbsolutePath();
 
-        adapter.setDropDownViewResource(
-                android.R.layout.simple_spinner_dropdown_item
-        );
+            if (pathText != null) {
+                pathText.setText(t);
+            }
 
-        q.setAdapter(adapter);
-        q.setOnItemSelectedListener(this);
-    }
-
-    private void setupPreferences() {
-
-        q.setSelection(getSavedLevel());
-
-        o.setChecked(r.getBoolean("rec", true));
-        p.setChecked(r.getBoolean("con", false));
-    }
-
-    private int getSavedLevel() {
-
-        try {
-
-            return Math.max(
-                    0,
-                    Math.min(
-                            9,
-                            Integer.parseInt(r.getString("level", "4"))
-                    )
-            );
+            startOperation(t);
 
         } catch (Exception e) {
-            return 4;
+            showMessage("Selection error: " + e.getMessage());
         }
     }
 
-    // --------------------------------
-    // RUN PYTHON OPERATION
-    // --------------------------------
-
-    private void executeOperation(File folder) {
-
-        if (operationRunning || activityDestroyed) return;
-
-        if (folder == null || !folder.isDirectory()) {
-            showMessage("Invalid folder");
+    private void startOperation(String folderPath) {
+        if (operationRunning) {
             return;
         }
 
@@ -438,27 +286,34 @@ public class MainActivity extends AppCompatActivity
         obfuscateButton.setEnabled(false);
         purgeButton.setEnabled(false);
 
-        s.setVisibility(View.VISIBLE);
+        final String operation = u;
 
-        int level = q.getSelectedItemPosition();
+        final int level = q != null
+                ? q.getSelectedItemPosition()
+                : 0;
 
-        boolean recursive = o.isChecked();
-        boolean constructors = p.isChecked();
+        final boolean recursive = o != null && o.isChecked();
+        final boolean constructors = p != null && p.isChecked();
 
-        String operation = u;
-        String folderPath = folder.getAbsolutePath();
+        r.edit()
+                .putInt("level", level)
+                .putBoolean("rec", recursive)
+                .putBoolean("con", constructors)
+                .apply();
 
         executor.execute(() -> {
+            String result;
 
             try {
+                if (!Python.isStarted()) {
+                    Python.start(new AndroidPlatform(this));
+                }
 
-                initializePython();
+                Python python = Python.getInstance();
 
-                Python py = Python.getInstance();
+                PyObject module = python.getModule("salt");
 
-                PyObject module = py.getModule("salt");
-
-                PyObject result = module.callAttr(
+                PyObject output = module.callAttr(
                         "run",
                         folderPath,
                         operation,
@@ -467,126 +322,50 @@ public class MainActivity extends AppCompatActivity
                         constructors
                 );
 
-                String output = result == null
-                        ? "Python returned None"
-                        : result.toString();
-
-                mainHandler.post(() -> {
-
-                    if (activityDestroyed) return;
-
-                    resultText.setText(output);
-                    finishOperation();
-                });
+                result = output == null
+                        ? "Operation completed"
+                        : output.toString();
 
             } catch (Exception e) {
+                result = "Error: " + e.getMessage();
+            }
 
-                String error = "Python error:\n" + e.toString();
+            final String finalResult = result;
 
-                mainHandler.post(() -> {
+            mainHandler.post(() -> {
+                if (destroyed) {
+                    return;
+                }
 
-                    if (activityDestroyed) return;
+                if (resultText != null) {
+                    resultText.setText(finalResult);
+                }
 
-                    resultText.setText(error);
-                    finishOperation();
-                });
+                operationRunning = false;
+
+                obfuscateButton.setEnabled(true);
+                purgeButton.setEnabled(true);
+            });
+        });
+    }
+
+    private void showMessage(String message) {
+        mainHandler.post(() -> {
+            if (!destroyed) {
+                Toast.makeText(
+                        MainActivity.this,
+                        message,
+                        Toast.LENGTH_LONG
+                ).show();
             }
         });
     }
 
-    private void finishOperation() {
-
-        operationRunning = false;
-
-        if (activityDestroyed) return;
-
-        s.setVisibility(View.GONE);
-
-        obfuscateButton.setEnabled(true);
-        purgeButton.setEnabled(true);
-    }
-
-    // --------------------------------
-    // PREFERENCES
-    // --------------------------------
-
-    private void resetFields() {
-
-        resultText.setText("");
-        pathText.setText("");
-    }
-
-    private void savePreferences() {
-
-        if (r == null || q == null || o == null || p == null
-                || q.getSelectedItem() == null) {
-            return;
-        }
-
-        r.edit()
-                .putString(
-                        "level",
-                        String.valueOf(q.getSelectedItemPosition())
-                )
-                .putBoolean("rec", o.isChecked())
-                .putBoolean("con", p.isChecked())
-                .apply();
-    }
-
-    // --------------------------------
-    // MESSAGE
-    // --------------------------------
-
-    private void showMessage(String message) {
-
-        if (activityDestroyed || isFinishing()) return;
-
-        Toast.makeText(
-                this,
-                message,
-                Toast.LENGTH_LONG
-        ).show();
-    }
-
-    // --------------------------------
-    // LISTENERS
-    // --------------------------------
-
-    @Override
-    public void onCheckedChanged(
-            CompoundButton button,
-            boolean checked) {
-
-        savePreferences();
-    }
-
-    @Override
-    public void onItemSelected(
-            AdapterView<?> parent,
-            View view,
-            int position,
-            long id) {
-
-        savePreferences();
-    }
-
-    @Override
-    public void onNothingSelected(AdapterView<?> parent) {
-    }
-
-    // --------------------------------
-    // DESTROY
-    // --------------------------------
-
     @Override
     protected void onDestroy() {
-
-        activityDestroyed = true;
-
+        destroyed = true;
+        mainHandler.removeCallbacksAndMessages(null);
+        executor.shutdownNow();
         super.onDestroy();
-
-        if (executor != null) {
-            executor.shutdown();
-        }
     }
-}
+                }
