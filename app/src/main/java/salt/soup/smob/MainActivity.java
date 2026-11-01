@@ -33,7 +33,7 @@ import java.util.concurrent.Executors;
 
 public class MainActivity extends AppCompatActivity
         implements AdapterView.OnItemSelectedListener,
-        android.widget.CompoundButton.OnCheckedChangeListener {
+        CompoundButton.OnCheckedChangeListener {
 
     public static String t = "";
     public static String u = "";
@@ -57,6 +57,7 @@ public class MainActivity extends AppCompatActivity
 
     private boolean waitingForStorageSettings = false;
     private boolean operationRunning = false;
+    private boolean chooserOpening = false;
     private volatile boolean activityDestroyed = false;
 
     // --------------------------------
@@ -85,6 +86,15 @@ public class MainActivity extends AppCompatActivity
         p = findViewById(R.id.checkBox2);
         q = findViewById(R.id.spinner);
 
+        if (obfuscateButton == null || purgeButton == null
+                || resultText == null || pathText == null
+                || s == null || o == null || p == null || q == null) {
+            Toast.makeText(this,
+                    "Layout initialization error",
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+
         obfuscateButton.setEnabled(false);
         purgeButton.setEnabled(false);
 
@@ -95,7 +105,7 @@ public class MainActivity extends AppCompatActivity
         p.setOnCheckedChangeListener(this);
 
         obfuscateButton.setOnClickListener(v -> {
-            if (operationRunning) return;
+            if (operationRunning || chooserOpening) return;
 
             u = "obf";
             resetFields();
@@ -103,7 +113,7 @@ public class MainActivity extends AppCompatActivity
         });
 
         purgeButton.setOnClickListener(v -> {
-            if (operationRunning) return;
+            if (operationRunning || chooserOpening) return;
 
             u = "pur";
             resetFields();
@@ -119,28 +129,33 @@ public class MainActivity extends AppCompatActivity
 
     private boolean hasStorageAccess() {
 
-        // Android 11 and newer: API 30+
         if (Build.VERSION.SDK_INT >= 30) {
             return Environment.isExternalStorageManager();
         }
 
-        // Android 6 through Android 10: API 23-29
-        boolean read = ContextCompat.checkSelfPermission(
-                this,
-                Manifest.permission.READ_EXTERNAL_STORAGE
-        ) == PackageManager.PERMISSION_GRANTED;
+        if (Build.VERSION.SDK_INT >= 23) {
 
-        boolean write = ContextCompat.checkSelfPermission(
-                this,
-                Manifest.permission.WRITE_EXTERNAL_STORAGE
-        ) == PackageManager.PERMISSION_GRANTED;
+            boolean read = ContextCompat.checkSelfPermission(
+                    this,
+                    Manifest.permission.READ_EXTERNAL_STORAGE
+            ) == PackageManager.PERMISSION_GRANTED;
 
-        return read && write;
+            boolean write = ContextCompat.checkSelfPermission(
+                    this,
+                    Manifest.permission.WRITE_EXTERNAL_STORAGE
+            ) == PackageManager.PERMISSION_GRANTED;
 
-        // Android 5 and older
+            return read && write;
+        }
+
+        return true;
     }
 
     private void openChooser() {
+
+        if (activityDestroyed || operationRunning || chooserOpening) {
+            return;
+        }
 
         if (hasStorageAccess()) {
             showStorageChooser();
@@ -151,43 +166,34 @@ public class MainActivity extends AppCompatActivity
 
     private void requestStorageAccess() {
 
-        // Android 11 and newer
         if (Build.VERSION.SDK_INT >= 30) {
 
-            waitingForStorageSettings = true;
-
             try {
-
                 Intent intent = new Intent(
                         Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
                         Uri.parse("package:" + getPackageName())
                 );
 
+                waitingForStorageSettings = true;
                 startActivity(intent);
 
             } catch (Exception e) {
 
                 try {
-
                     Intent intent = new Intent(
                             Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION
                     );
 
+                    waitingForStorageSettings = true;
                     startActivity(intent);
 
                 } catch (Exception ex) {
-
                     waitingForStorageSettings = false;
-
-                    showMessage(
-                            "Cannot open storage settings: "
-                                    + ex.getMessage()
-                    );
+                    showMessage("Cannot open storage settings: " + ex);
                 }
             }
 
-            // Android 6 through Android 10
-        } else {
+        } else if (Build.VERSION.SDK_INT >= 23) {
 
             ActivityCompat.requestPermissions(
                     this,
@@ -198,6 +204,8 @@ public class MainActivity extends AppCompatActivity
                     REQ_STORAGE
             );
 
+        } else {
+            showStorageChooser();
         }
     }
 
@@ -221,13 +229,10 @@ public class MainActivity extends AppCompatActivity
     public void onRequestPermissionsResult(
             int requestCode,
             String[] permissions,
-            int[] grantResults
-    ) {
+            int[] grantResults) {
 
         super.onRequestPermissionsResult(
-                requestCode,
-                permissions,
-                grantResults
+                requestCode, permissions, grantResults
         );
 
         if (requestCode == REQ_STORAGE) {
@@ -246,7 +251,25 @@ public class MainActivity extends AppCompatActivity
 
     private void showStorageChooser() {
 
+        if (activityDestroyed || isFinishing() || isDestroyed()) {
+            return;
+        }
+
+        if (chooserOpening) return;
+
+        chooserOpening = true;
+
         try {
+
+            File storage = Environment.getExternalStorageDirectory();
+
+            if (storage == null || !storage.exists()
+                    || !storage.isDirectory() || !storage.canRead()) {
+
+                chooserOpening = false;
+                showMessage("External storage is unavailable");
+                return;
+            }
 
             StorageChooser chooser = new StorageChooser.Builder()
                     .withActivity(this)
@@ -257,6 +280,10 @@ public class MainActivity extends AppCompatActivity
                     .build();
 
             chooser.setOnSelectListener(path -> {
+
+                chooserOpening = false;
+
+                if (activityDestroyed || isFinishing()) return;
 
                 if (path == null || path.trim().isEmpty()) {
                     showMessage("Folder not selected");
@@ -284,9 +311,9 @@ public class MainActivity extends AppCompatActivity
 
         } catch (Exception e) {
 
-            showMessage(
-                    "Storage chooser error: " + e.getMessage()
-            );
+            chooserOpening = false;
+
+            showMessage("Storage chooser error: " + e.toString());
         }
     }
 
@@ -331,9 +358,11 @@ public class MainActivity extends AppCompatActivity
 
                     s.setVisibility(View.GONE);
 
+                    obfuscateButton.setEnabled(false);
+                    purgeButton.setEnabled(false);
+
                     showMessage(
-                            "Python initialization error: "
-                                    + e.getMessage()
+                            "Python initialization error: " + e
                     );
                 });
             }
@@ -382,9 +411,7 @@ public class MainActivity extends AppCompatActivity
                     0,
                     Math.min(
                             9,
-                            Integer.parseInt(
-                                    r.getString("level", "4")
-                            )
+                            Integer.parseInt(r.getString("level", "4"))
                     )
             );
 
@@ -399,7 +426,12 @@ public class MainActivity extends AppCompatActivity
 
     private void executeOperation(File folder) {
 
-        if (operationRunning) return;
+        if (operationRunning || activityDestroyed) return;
+
+        if (folder == null || !folder.isDirectory()) {
+            showMessage("Invalid folder");
+            return;
+        }
 
         operationRunning = true;
 
@@ -435,7 +467,9 @@ public class MainActivity extends AppCompatActivity
                         constructors
                 );
 
-                String output = result.toString();
+                String output = result == null
+                        ? "Python returned None"
+                        : result.toString();
 
                 mainHandler.post(() -> {
 
@@ -447,8 +481,7 @@ public class MainActivity extends AppCompatActivity
 
             } catch (Exception e) {
 
-                String error =
-                        "Python error:\n" + e.getMessage();
+                String error = "Python error:\n" + e.toString();
 
                 mainHandler.post(() -> {
 
@@ -465,6 +498,8 @@ public class MainActivity extends AppCompatActivity
 
         operationRunning = false;
 
+        if (activityDestroyed) return;
+
         s.setVisibility(View.GONE);
 
         obfuscateButton.setEnabled(true);
@@ -476,13 +511,14 @@ public class MainActivity extends AppCompatActivity
     // --------------------------------
 
     private void resetFields() {
+
         resultText.setText("");
         pathText.setText("");
     }
 
     private void savePreferences() {
 
-        if (r == null || q == null
+        if (r == null || q == null || o == null || p == null
                 || q.getSelectedItem() == null) {
             return;
         }
@@ -497,7 +533,13 @@ public class MainActivity extends AppCompatActivity
                 .apply();
     }
 
+    // --------------------------------
+    // MESSAGE
+    // --------------------------------
+
     private void showMessage(String message) {
+
+        if (activityDestroyed || isFinishing()) return;
 
         Toast.makeText(
                 this,
@@ -506,11 +548,15 @@ public class MainActivity extends AppCompatActivity
         ).show();
     }
 
+    // --------------------------------
+    // LISTENERS
+    // --------------------------------
+
     @Override
     public void onCheckedChanged(
-            android.widget.CompoundButton button,
-            boolean checked
-    ) {
+            CompoundButton button,
+            boolean checked) {
+
         savePreferences();
     }
 
@@ -519,8 +565,8 @@ public class MainActivity extends AppCompatActivity
             AdapterView<?> parent,
             View view,
             int position,
-            long id
-    ) {
+            long id) {
+
         savePreferences();
     }
 
