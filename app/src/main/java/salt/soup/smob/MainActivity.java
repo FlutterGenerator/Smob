@@ -26,9 +26,9 @@ import java.util.concurrent.Executors;
 
 // Импорт FileChooserBuilder добавь через AIDE:
 // FileChooserBuilder
-
+import com.maxieds.androidfilepickerlightlibrary.FileChooserBuilder;
+import com.chaquo.python.android.AndroidPlatform;
 import com.chaquo.python.Python;
-import com.chaquo.python.AndroidPlatform;
 import com.chaquo.python.PyObject;
 
 public class MainActivity extends Activity {
