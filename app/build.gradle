@@ -46,5 +46,5 @@ dependencies {
     androidTestImplementation libs.ext.junit
     androidTestImplementation libs.espresso.core
 
-    implementation 'com.github.maxieds:AndroidFilePickerLight:release-v7'
+    implementation 'com.github.maxieds:AndroidFilePickerLight:master-SNAPSHOT'
 }
