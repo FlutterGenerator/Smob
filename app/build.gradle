@@ -4,7 +4,7 @@ plugins {
 }
 
 android {
-    namespace 'salt.soup.smob'
+    namespace = 'salt.soup.smob'
     compileSdkVersion 36
 
     defaultConfig {
