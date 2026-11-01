@@ -5,7 +5,7 @@ plugins {
 
 android {
     namespace = 'salt.soup.smob'
-    compileSdkVersion 36
+    compileSdkVersion 37
 
     defaultConfig {
         applicationId "salt.soup.smob"
@@ -46,5 +46,5 @@ dependencies {
     androidTestImplementation libs.ext.junit
     androidTestImplementation libs.espresso.core
 
-    implementation "io.github.tutorialsandroid:filepicker:9.0.1"
+    implementation "io.github.tutorialsandroid:filepicker:10.1.3"
 }
